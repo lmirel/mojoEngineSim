@@ -8,18 +8,14 @@
       readable, still some to do though.
 */
 
-
 #include "settings.h"
 #include "idle.h"
 
 // Mode settings - These could easily be 4 jumpers connected to spare pins, checked at startup to determine mode
-boolean managedThrottle = true;     // Managed mode looks after the digipot if fitted for volume, and adds some mass to the engine
+boolean managedThrottle = false;     // Managed mode looks after the digipot if fitted for volume, and adds some mass to the engine
 boolean potThrottle = true;         // A pot connected to A1, 0-1023 sets speed
 boolean pwmThrottle = false;        // Takes a standard servo signal on pin 2 (UNO)
 boolean spiThrottle = false;        // SPI mode, is an SPI slave, expects 1-255 for throttle position, with 0 being engine off
-
-
-
 
 // Stuff not to play with!
 #define SPEAKER 3                               // This is kept as 3, original code had 11 as option, but this conflicts with SPI
@@ -33,12 +29,16 @@ uint8_t  throttleByte = 0;                      // Raw throttle position in SPI 
 uint8_t  spiReturnByte = 0;                     // The current RPM mapped to a byte for SPI return
 volatile int16_t pulseWidth = 0;                // Current pulse width when in PWM mode
 
-
-
-
+#define DEBUG 1
+#define debug_println(...) \
+            do { if (DEBUG) Serial.println(__VA_ARGS__); } while (0)
+#define debug_print(...) \
+            do { if (DEBUG) Serial.print(__VA_ARGS__); } while (0)
 
 void setup()
 {
+  if (DEBUG)
+    Serial.begin(115200);
   // SPI slave mode
   pinMode(10, INPUT);  // Chip Select
   pinMode(12, OUTPUT); // MISO pin, this is for ATMEGA328/168
@@ -64,7 +64,6 @@ void setup()
   digitalWrite(A0, HIGH);
   digitalWrite(A2, LOW);
 
-
   // pwm in setup, for a standard servo pulse
   pinMode(2, INPUT); // We don't want INPUT_PULLUP as the 5v may damage some receivers!
   if(pwmThrottle){   // And we don't want the interrupt firing when not in pwm mode
@@ -75,9 +74,6 @@ void setup()
   startPlayback();
 }
 
-
-
-
 void loop()
 {
   if(potThrottle) doPotThrottle();
@@ -87,17 +83,59 @@ void loop()
   if(managedThrottle) manageSpeed();
 }
 
-
-
-
 /* _____ _               _   _   _
   |_   _| |__  _ __ ___ | |_| |_| | ___  ___
     | | | '_ \| '__/ _ \| __| __| |/ _ \/ __|
     | | | | | | | | (_) | |_| |_| |  __/\__ \
     |_| |_| |_|_|  \___/ \__|\__|_|\___||___/ */
-
+#define ACC_RATE 10
+#define MAX_RPM (6.4*1024)
+#define IDLE_RPM 1024
+#define SHIFT_RPM (4*1024)
+#define SHIFT_RATE (386)
 void doPotThrottle(){
-
+  bool thr = digitalRead(2)?true:false;
+  static int cthr = 0;
+  static int cgear = 1;
+  static int acc_rate = ACC_RATE;
+  if (thr)
+  {
+    acc_rate = ACC_RATE - cgear;
+    //accelerate
+    cthr += acc_rate;
+    if (cthr > MAX_RPM)
+      cthr = MAX_RPM;
+    //gear shift
+    if (cgear < 8 && cthr > (SHIFT_RPM + cgear * SHIFT_RATE))
+    {
+      cgear++;
+      cthr = IDLE_RPM + cgear * SHIFT_RATE;
+    }
+  }
+  else
+  {
+    //brake
+    cgear = 1;//jst drop it
+    //
+    cthr -= 2*ACC_RATE;
+    if (cthr < IDLE_RPM)
+      cthr = IDLE_RPM;
+  }
+  if(managedThrottle){
+    currentThrottle = map (cthr, 0, MAX_RPM, 0, 1023);
+  } else {
+    currentSmpleRate = F_CPU / (BASE_RATE + long(cthr * TOP_SPEED_MULTIPLIER));
+  }
+  debug_print (F("digipot read: "));
+  debug_print (thr);
+  debug_print (F(" gear: "));
+  debug_print (cgear);
+  debug_print (F(" throttle: "));
+  debug_println (cthr);
+  //
+  return;
+  //we don't use the code below
+  
   if(managedThrottle){
     currentThrottle = analogRead(POT_PIN);
   }
@@ -106,7 +144,6 @@ void doPotThrottle(){
   }
 
 }
-
 
 void doPwmThrottle(){
 
@@ -134,8 +171,6 @@ void doPwmThrottle(){
 
 }
 
-
-
 void doSpiThrottle(){
 
   if(managedThrottle){
@@ -154,8 +189,6 @@ void doSpiThrottle(){
   }
 
 }
-
-
 
 /* __  __                 ____  _                 _       _   _
   |  \/  | __ _ ___ ___  / ___|(_)_ __ ___  _   _| | __ _| |_(_) ___  _ __
@@ -219,8 +252,6 @@ void manageSpeed(){
 
 }
 
-
-
 /* ____  _       _   ____       _
   |  _ \(_) __ _(_) |  _ \ ___ | |_
   | | | | |/ _` | | | |_) / _ \| __|
@@ -241,15 +272,6 @@ void writePot(uint8_t data){
   digitalWrite(POT_CS, HIGH);
 
 }
-
-
-
-
-
-
-
-
-
 
 /* ____   ____ __  __   ____       _
   |  _ \ / ___|  \/  | / ___|  ___| |_ _   _ _ __
@@ -301,7 +323,6 @@ void startPlayback()
   }
 }
 
-
 void stopPlayback()
 {
   // Fadeout the volume pot
@@ -319,11 +340,6 @@ void stopPlayback()
 
   digitalWrite(SPEAKER, LOW);
 }
-
-
-
-
-
 
 /* ___       _                             _
   |_ _|_ __ | |_ ___ _ __ _ __ _   _ _ __ | |_ ___
