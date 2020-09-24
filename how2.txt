@@ -1,0 +1,14 @@
+from: https://github.com/TheDIYGuy999/Rc_Engine_Sound_ESP32
+
+How to create new .h sound files:
+Audacity:
+import the WAV sound file you want in Audacity
+convert it to mono, if needed: Tracks > Mix > Mix Stereo down to Mono
+on the bottom left, select project frequency 22050Hz or 16000
+search for a cyclic pattern in the idle sound (the amount of ignition pulses is usually the same as the cylinder number), cut the "idle" sample to exactly this length, have a close look at the zero crossings to avoid clicking noises. The loudest peak should always be at the end of the sample.
+do the same with the "rev" sound. It will be 2 - 4 times shorter than the "idle" sample, depending on the engine and rpm of the "rev" sample
+change the "Rate" (dropdown on the left of the sample) of the "rev" sample, until the length is the same as in the "idle" sample. This is very important!
+duplicate a part of the "rev" sample (the one with the original, unchanged "Rate" speed). This is the "knock" sample. Cut it to this max length: "Idle" length / number of cylinders / rpm range "MAX_RPM_PERCENTAGE" (usually 2 - 4 or 200 - 400%)
+adjust the volume of all samples, so that the entire dynamic range is used
+you may also want to apply high pass or low pass filters to fine tune the sound
+select > export audio > selected audio > WAV > Unsigned 8-bit-PCM

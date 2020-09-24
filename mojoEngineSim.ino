@@ -10,12 +10,11 @@
 
 #include "settings.h"
 #include "idle.h"
+#define BASE_RATE idle_sampleRate
 
 // Mode settings - These could easily be 4 jumpers connected to spare pins, checked at startup to determine mode
-boolean managedThrottle = false;     // Managed mode looks after the digipot if fitted for volume, and adds some mass to the engine
-boolean potThrottle = true;         // A pot connected to A1, 0-1023 sets speed
-boolean pwmThrottle = false;        // Takes a standard servo signal on pin 2 (UNO)
-boolean spiThrottle = false;        // SPI mode, is an SPI slave, expects 1-255 for throttle position, with 0 being engine off
+boolean managedThrottle = true;     // Managed mode looks after the digipot if fitted for volume, and adds some mass to the engine
+//boolean potThrottle = true;         // A pot connected to A1, 0-1023 sets speed
 
 // Stuff not to play with!
 #define SPEAKER 3                               // This is kept as 3, original code had 11 as option, but this conflicts with SPI
@@ -25,11 +24,8 @@ uint16_t curVolume = 0;                         // Current digi pot volume, used
 volatile uint16_t curEngineSample;              // Index of current loaded sample
 uint8_t  lastSample;                            // Last loaded sample
 int16_t  currentThrottle = 0;                   // 0 - 1000, a top value of 1023 is acceptable
-uint8_t  throttleByte = 0;                      // Raw throttle position in SPI mode, gets mapped to currentThrottle
-uint8_t  spiReturnByte = 0;                     // The current RPM mapped to a byte for SPI return
-volatile int16_t pulseWidth = 0;                // Current pulse width when in PWM mode
 
-#define DEBUG 1
+#define DEBUG 0
 #define debug_println(...) \
             do { if (DEBUG) Serial.println(__VA_ARGS__); } while (0)
 #define debug_print(...) \
@@ -39,11 +35,7 @@ void setup()
 {
   if (DEBUG)
     Serial.begin(115200);
-  // SPI slave mode
-  pinMode(10, INPUT);  // Chip Select
-  pinMode(12, OUTPUT); // MISO pin, this is for ATMEGA328/168
-  SPCR |= _BV(SPE);// turn on SPI in slave mode
-  SPCR |= _BV(SPIE); // turn on interrupts
+  //SPCR |= _BV(SPIE); // turn on interrupts
 
   // MCP4131 digi pot
   pinMode(POT_CS, OUTPUT);
@@ -56,29 +48,13 @@ void setup()
   if(managedThrottle) writePot(0);
   else writePot(DEFAULT_VOLUME);
 
-  // Analog input, we set these pins so a pot with 0.1in pin spacing can
-  // plug directly into the Arduino header, if you change POT_PIN you may
-  // want to comment them out
-  pinMode(A0, OUTPUT);
-  pinMode(A2, OUTPUT);
-  digitalWrite(A0, HIGH);
-  digitalWrite(A2, LOW);
-
-  // pwm in setup, for a standard servo pulse
-  pinMode(2, INPUT); // We don't want INPUT_PULLUP as the 5v may damage some receivers!
-  if(pwmThrottle){   // And we don't want the interrupt firing when not in pwm mode
-    attachInterrupt(0, getPulsewidth, CHANGE);
-  }
-
   // setup complete, so start making sounds
   startPlayback();
 }
 
 void loop()
 {
-  if(potThrottle) doPotThrottle();
-  else if(pwmThrottle) doPwmThrottle();
-  else if(spiThrottle) doSpiThrottle();
+  doPotThrottle();
 
   if(managedThrottle) manageSpeed();
 }
@@ -88,48 +64,37 @@ void loop()
     | | | '_ \| '__/ _ \| __| __| |/ _ \/ __|
     | | | | | | | | (_) | |_| |_| |  __/\__ \
     |_| |_| |_|_|  \___/ \__|\__|_|\___||___/ */
-#define ACC_RATE 10
-#define MAX_RPM (6.4*1024)
-#define IDLE_RPM 1024
-#define SHIFT_RPM (4*1024)
-#define SHIFT_RATE (386)
+#define ACC_RATE 2
+#define MAX_RPM (1023)
+#define IDLE_RPM 0
 void doPotThrottle(){
   bool thr = digitalRead(2)?true:false;
-  static int cthr = 0;
-  static int cgear = 1;
-  static int acc_rate = ACC_RATE;
+  static int cthr = IDLE_RPM;
   if (thr)
   {
-    acc_rate = ACC_RATE - cgear;
     //accelerate
-    cthr += acc_rate;
+    cthr += ACC_RATE;
     if (cthr > MAX_RPM)
       cthr = MAX_RPM;
-    //gear shift
-    if (cgear < 8 && cthr > (SHIFT_RPM + cgear * SHIFT_RATE))
-    {
-      cgear++;
-      cthr = IDLE_RPM + cgear * SHIFT_RATE;
-    }
   }
   else
   {
-    //brake
-    cgear = 1;//jst drop it
     //
-    cthr -= 2*ACC_RATE;
+    cthr -= 3*ACC_RATE;
     if (cthr < IDLE_RPM)
       cthr = IDLE_RPM;
   }
+  //
   if(managedThrottle){
-    currentThrottle = map (cthr, 0, MAX_RPM, 0, 1023);
+    //currentThrottle = thr?1023:0;//map (cthr, 0, MAX_RPM, 0, 1023);
+    currentThrottle = cthr;//map (cthr, 0, MAX_RPM, 0, 1023);
   } else {
     currentSmpleRate = F_CPU / (BASE_RATE + long(cthr * TOP_SPEED_MULTIPLIER));
   }
   debug_print (F("digipot read: "));
   debug_print (thr);
   debug_print (F(" gear: "));
-  debug_print (cgear);
+  //debug_print (cgear);
   debug_print (F(" throttle: "));
   debug_println (cthr);
   //
@@ -141,51 +106,6 @@ void doPotThrottle(){
   }
   else {
     currentSmpleRate = F_CPU / (BASE_RATE + long(analogRead(POT_PIN) * TOP_SPEED_MULTIPLIER));
-  }
-
-}
-
-void doPwmThrottle(){
-
-  if(managedThrottle){
-    if(pulseWidth > 800 && pulseWidth < 2200){ // check if the pulsewidth looks like a servo pulse
-      if(pulseWidth < 1000) pulseWidth = 1000; // Constrain the value
-      if(pulseWidth > 2000) pulseWidth = 2000;
-
-      if(pulseWidth > 1520) currentThrottle = (pulseWidth - 1500) *2;  // make a throttle value from the pulsewidth 0 - 1000
-      else if(pulseWidth < 1470) currentThrottle = abs( (pulseWidth - 1500) *2);
-      else currentThrottle = 0;
-    }
-  }
-  else {
-    if(pulseWidth > 800 && pulseWidth < 2200){ // check if the pulsewidth looks like a servo pulse
-      if(pulseWidth < 1000) pulseWidth = 1000; // Constrain the value
-      if(pulseWidth > 2000) pulseWidth = 2000;
-
-      if(pulseWidth > 1520) currentThrottle = (pulseWidth - 1500) *2;  // make a throttle value from the pulsewidth 0 - 1000
-      else if(pulseWidth < 1470) currentThrottle = abs( (pulseWidth - 1500) *2);
-      else currentThrottle = 0;
-      currentSmpleRate = F_CPU / (BASE_RATE + long(currentThrottle * TOP_SPEED_MULTIPLIER));
-    }
-  }
-
-}
-
-void doSpiThrottle(){
-
-  if(managedThrottle){
-    if(throttleByte > 0){
-      if(!audioRunning) startPlayback();
-      currentThrottle = throttleByte << 2;
-    }
-    else if(audioRunning) stopPlayback();
-  }
-  else {
-    if(throttleByte > 0){
-      if(!audioRunning) startPlayback();
-      currentSmpleRate = F_CPU / (BASE_RATE + long((throttleByte << 2) * TOP_SPEED_MULTIPLIER));
-    }
-    else if(audioRunning) stopPlayback();
   }
 
 }
@@ -222,9 +142,9 @@ void manageSpeed(){
       prevThrottle = currentThrottle;
     }
 
-    if(currentRpm >> 2 < 255) spiReturnByte = currentRpm >> 2;
-    else spiReturnByte = 255;
-    if(currentRpm >> 2 < 0) spiReturnByte = 0;
+    //if(currentRpm >> 2 < 255) spiReturnByte = currentRpm >> 2;
+    //else spiReturnByte = 255;
+    //if(currentRpm >> 2 < 0) spiReturnByte = 0;
 
     currentSmpleRate = F_CPU / (BASE_RATE + long(currentRpm * TOP_SPEED_MULTIPLIER) );
   }
@@ -310,7 +230,7 @@ void startPlayback()
 
   TIMSK1 |= _BV(OCIE1A);                                   // Enable interrupt when TCNT1 == OCR1A (p.136)
 
-  lastSample = pgm_read_byte(&idle_data[idle_len-1]);
+  lastSample = pgm_read_byte(&idle_data[idle_length-1]);
   curEngineSample = 0;
   sei();
 
@@ -348,41 +268,11 @@ void stopPlayback()
   |___|_| |_|\__\___|_|  |_|   \__,_| .__/ \__|___/
                                     |_|            */
 
-// Uses a pin change interrupt and micros() to get the pulsewidth at pin 2
-void getPulsewidth(){
-  unsigned long currentMicros = micros();
-  boolean currentState = digitalRead(2);
-
-  static unsigned long prevMicros = 0;
-  static boolean lastState = LOW;
-
-  if(lastState == LOW && currentState == HIGH){      // Rising edge
-    prevMicros = currentMicros;
-    lastState = currentState;
-  }
-  else if(lastState == HIGH && currentState == LOW){ // Falling edge
-    pulseWidth = currentMicros - prevMicros;
-    lastState = currentState;
-  }
-
-}
-
-// SPI slave interrupt, just stores the last byte and sends
-// current throttle when in managed mode
-// If we change to a multibyte system this will get expanded
-ISR (SPI_STC_vect){
-  if(digitalRead(10)){
-    throttleByte = SPDR;  // Store new byte
-    SPDR = spiReturnByte; // Queue up return byte for next transaction
-  }
-}
-
-
 // This is the main playback interrupt, keep this nice and tight!!
 ISR(TIMER1_COMPA_vect) {
   OCR1A = currentSmpleRate;
 
-  if (curEngineSample >= idle_len) { // Loop the sample
+  if (curEngineSample >= idle_length) { // Loop the sample
     curEngineSample = 0;
   }
 

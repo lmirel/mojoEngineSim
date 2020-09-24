@@ -12,4 +12,4 @@
 #define DEFAULT_VOLUME 127      // Volume when in non managed mode
 #define VOL_MIN 20              // Min volume in managed mode 0 - 127
 #define VOL_MAX 127             // Max volume in managed mode 0 - 127
-#define TOP_SPEED_MULTIPLIER 5 // RPM multiplier in managed mode, bigger the number the larger the rev range, 10 - 15 is a good place to start
+#define TOP_SPEED_MULTIPLIER 15 // RPM multiplier in managed mode, bigger the number the larger the rev range, 10 - 15 is a good place to start
